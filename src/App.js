@@ -9,7 +9,6 @@ import ChristmasTree from './ChristmasTree.js';
 import Train from './Train.js';
 import Floor from './Floor.js';
 import Skybox from './Skybox.js';
-import Particles from './Particles.js';
 import Text from './Text.js';
 
 class App {
@@ -26,6 +25,17 @@ class App {
             height: window.innerHeight
         };
 
+        // Temperature slider logic
+        this.tempSlider = document.getElementById('temp-slider');
+        this.tempValue = document.getElementById('temp-value');
+        this.currentTemperature = parseFloat(this.tempSlider.value);
+        this.tempValue.textContent = this.currentTemperature;
+        this.tempSlider.addEventListener('input', () => {
+            this.currentTemperature = parseFloat(this.tempSlider.value);
+            this.tempValue.textContent = this.currentTemperature;
+        });
+        window.getCurrentTemperature = () => this.currentTemperature;
+
         this.initCamera();
         this.initRenderer();
         this.initControls();
@@ -40,10 +50,95 @@ class App {
         this.train = new Train(this.scene);
         this.floor = new Floor(this.scene);
         this.skybox = new Skybox(this.scene);
-        this.particles = new Particles(this.scene);
         this.text = new Text(this.scene);
+        
+        // --- Snow System ---
+        this.SNOW_PARTICLE_COUNT = 1500;
+        this.SNOW_AREA = 8;
+        this.SNOW_HEIGHT = 7;
+        this.GROUND_Y = 0.01;
+        // Snowfall particles
+        this.snowGeometry = new THREE.BufferGeometry();
+        this.snowPositions = new Float32Array(this.SNOW_PARTICLE_COUNT * 3);
+        this.snowVelocities = new Float32Array(this.SNOW_PARTICLE_COUNT);
+        for (let i = 0; i < this.SNOW_PARTICLE_COUNT; i++) {
+            this.snowPositions[i * 3] = (Math.random() - 0.5) * this.SNOW_AREA;
+            this.snowPositions[i * 3 + 1] = Math.random() * this.SNOW_HEIGHT + 2;
+            this.snowPositions[i * 3 + 2] = (Math.random() - 0.5) * this.SNOW_AREA;
+            this.snowVelocities[i] = 0.5 + Math.random() * 0.5;
+        }
+        this.snowGeometry.setAttribute('position', new THREE.BufferAttribute(this.snowPositions, 3));
+        // Load snowflake texture for particles
+        this.snowMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.08,
+            sizeAttenuation: true,
+            transparent: true
+        });
+        this.snowParticles = new THREE.Points(this.snowGeometry, this.snowMaterial);
+        this.scene.add(this.snowParticles);
+        // Ground snow
+        this.groundSnowMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
+        this.groundSnow = new THREE.Mesh(new THREE.CircleGeometry(4.5, 40), this.groundSnowMaterial);
+        this.groundSnow.rotation.x = -Math.PI / 2;
+        this.groundSnow.position.y = this.GROUND_Y + 0.01;
+        this.groundSnow.visible = false;
+        this.scene.add(this.groundSnow);
+        // Water
+        this.waterMaterial = new THREE.MeshBasicMaterial({ color: 0x3399ff, transparent: true, opacity: 0.5 });
+        this.water = new THREE.Mesh(new THREE.CircleGeometry(4.5, 40), this.waterMaterial);
+        this.water.rotation.x = -Math.PI / 2;
+        this.water.position.y = this.GROUND_Y + 0.005;
+        this.water.visible = false;
+        this.scene.add(this.water);
+        this.groundSnowAmount = 0; // Start with clean ground
+        // --- End Snow System ---
+
+        // --- Landed Snow Particles System ---
+        this.maxGroundParticles = 400; // Allow more ground particles
+        this.groundParticlePositions = [];
+        this.groundParticleOpacities = [];
+        this.groundParticleGeometry = new THREE.BufferGeometry();
+        this.groundParticleMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.18,
+            sizeAttenuation: true,
+            transparent: true,
+            opacity: 1
+        });
+        this.groundParticlePoints = new THREE.Points(this.groundParticleGeometry, this.groundParticleMaterial);
+        this.scene.add(this.groundParticlePoints);
+
+        // --- Landed Snow Particles on Tree System ---
+        this.maxTreeParticles = 200;
+        this.treeParticlePositions = [];
+        this.treeParticleOpacities = [];
+        this.treeParticleGeometry = new THREE.BufferGeometry();
+        this.treeParticleMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.16,
+            sizeAttenuation: true,
+            transparent: true,
+            opacity: 1
+        });
+        this.treeParticlePoints = new THREE.Points(this.treeParticleGeometry, this.treeParticleMaterial);
+        this.scene.add(this.treeParticlePoints);
+        // Tree area approximation (centered at 0,0,0)
+        this.treeRadius = 1.2; // Adjust as needed for your tree size
+        this.treeBaseY = 0.0;
+        this.treeTopY = 2.5; // Adjust as needed for your tree height
+
         this.loadAssets().then(() => {
             this.onAssetsLoaded();
+            // Dynamically set tree radius and height after tree loads
+            if (this.christmasTree && this.christmasTree.tree) {
+                const box = new THREE.Box3().setFromObject(this.christmasTree.tree);
+                const size = new THREE.Vector3();
+                box.getSize(size);
+                this.treeRadius = Math.max(size.x, size.z) / 2;
+                this.treeBaseY = box.min.y;
+                this.treeTopY = box.max.y;
+            }
         });
 
         this.clock = new THREE.Clock();
@@ -70,15 +165,13 @@ class App {
 
     initControls() {
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-        this.controls.target.set(0, 0.75, 0);
         this.controls.enableDamping = true;
+        this.controls.enableZoom = true;
+        this.controls.enablePan = true;
         this.controls.minDistance = 5;
-        this.controls.maxDistance = 10; // Ensure the camera doesn't get outside the skybox
+        this.controls.maxDistance = 20;
         this.controls.maxPolarAngle = Math.PI / 2;
-        this.controls.minAzimuthAngle = -Math.PI / 2; // Set the min azimuthal angle
-        this.controls.maxAzimuthAngle = Math.PI / 2; // Set the max azimuthal angle
-        this.controls.dampingFactor = 0.1;
-        this.controls.enablePan = false;
+        this.controls.target.set(0, 0, 0);
     }
 
     initEventListeners() {
@@ -107,7 +200,6 @@ class App {
             this.train.load(),
             this.floor.load(),
             this.skybox.load(),
-            this.particles.load(),
             this.text.load()
         ]);
     }
@@ -214,14 +306,146 @@ class App {
             this.train.update(deltaTime);
         }
 
-        if (this.particles) {
-            this.particles.update(deltaTime);
-        }
+        // Update snow system
+        this.updateSnowSystem(deltaTime);
 
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
 
         requestAnimationFrame(() => this.animate());
+    }
+
+    updateSnowSystem(deltaTime) {
+        // Digital twin snow/water logic
+        if (this.currentTemperature < 0) {
+            // Snowfall and accumulation
+            this.snowParticles.visible = true;
+            const positions = this.snowGeometry.attributes.position.array;
+            // Calculate intensity factor: 0 at 0°C, 1 at -10°C
+            const intensity = Math.min(1, Math.max(0, -this.currentTemperature / 10));
+            const baseSpeed = 0.5;
+            const extraSpeed = 1.0; // max extra speed at -10°C
+            const snowSpeed = baseSpeed + intensity * extraSpeed;
+            for (let i = 0; i < this.SNOW_PARTICLE_COUNT; i++) {
+                positions[i * 3 + 1] -= snowSpeed * deltaTime;
+                const x = positions[i * 3];
+                const y = positions[i * 3 + 1];
+                const z = positions[i * 3 + 2];
+                // Check for tree collision at any height
+                if (
+                    y > this.treeBaseY + 0.1 &&
+                    y < this.treeTopY &&
+                    this.treeParticlePositions.length < this.maxTreeParticles
+                ) {
+                    const h = this.treeTopY - this.treeBaseY;
+                    const relY = y - this.treeBaseY;
+                    const coneRadiusAtY = this.treeRadius * (1 - (relY / h));
+                    const distXZ = Math.sqrt(x * x + z * z);
+                    if (distXZ < coneRadiusAtY) {
+                        // Land on tree
+                        const theta = Math.random() * 2 * Math.PI;
+                        const r = coneRadiusAtY + (Math.random() - 0.5) * 0.08;
+                        const px = Math.cos(theta) * r;
+                        const pz = Math.sin(theta) * r;
+                        this.treeParticlePositions.push([
+                            px,
+                            y,
+                            pz
+                        ]);
+                        this.treeParticleOpacities.push(1.0);
+                        // Reset snowflake to top
+                        positions[i * 3] = (Math.random() - 0.5) * this.SNOW_AREA;
+                        positions[i * 3 + 1] = this.SNOW_HEIGHT + Math.random() * 2;
+                        positions[i * 3 + 2] = (Math.random() - 0.5) * this.SNOW_AREA;
+                        continue;
+                    }
+                }
+                // If it reaches the ground, land on ground as before
+                if (y < this.GROUND_Y + 0.05) {
+                    const baseProb = 0.08;
+                    const extraProb = 0.12; // max extra probability at -10°C
+                    const landProb = baseProb + extraProb * intensity;
+                    if (Math.random() < landProb && this.groundParticlePositions.length < this.maxGroundParticles) {
+                        const offsetX = (Math.random() - 0.5) * 0.15;
+                        const offsetZ = (Math.random() - 0.5) * 0.15;
+                        this.groundParticlePositions.push([
+                            x + offsetX,
+                            this.GROUND_Y + 0.02 + Math.random() * 0.01,
+                            z + offsetZ
+                        ]);
+                        this.groundParticleOpacities.push(1.0);
+                    }
+                    positions[i * 3] = (Math.random() - 0.5) * this.SNOW_AREA;
+                    positions[i * 3 + 1] = this.SNOW_HEIGHT + Math.random() * 2;
+                    positions[i * 3 + 2] = (Math.random() - 0.5) * this.SNOW_AREA;
+                }
+            }
+            this.snowGeometry.attributes.position.needsUpdate = true;
+            // Accumulate snow on ground
+            this.groundSnowAmount += deltaTime * 0.15; // Accumulate
+            if (this.groundSnowAmount > 1) this.groundSnowAmount = 1;
+        } else {
+            // No snowfall, start melting
+            this.snowParticles.visible = false;
+            if (this.currentTemperature > 0 && this.groundSnowAmount > 0) {
+                // Melting rate increases with temperature above 0°C
+                const meltRate = deltaTime * 0.08 * this.currentTemperature; // 0.08 is a tunable factor
+                this.groundSnowAmount -= meltRate;
+                if (this.groundSnowAmount < 0) this.groundSnowAmount = 0;
+                // Fade ground particles proportionally
+                for (let i = 0; i < this.groundParticleOpacities.length; i++) {
+                    this.groundParticleOpacities[i] -= deltaTime * 0.2 * this.currentTemperature;
+                }
+                // Remove fully melted particles
+                while (this.groundParticleOpacities.length > 0 && this.groundParticleOpacities[0] <= 0) {
+                    this.groundParticleOpacities.shift();
+                    this.groundParticlePositions.shift();
+                }
+                // Fade tree particles proportionally
+                for (let i = 0; i < this.treeParticleOpacities.length; i++) {
+                    this.treeParticleOpacities[i] -= deltaTime * 0.2 * this.currentTemperature;
+                }
+                // Remove fully melted tree particles
+                while (this.treeParticleOpacities.length > 0 && this.treeParticleOpacities[0] <= 0) {
+                    this.treeParticleOpacities.shift();
+                    this.treeParticlePositions.shift();
+                }
+            }
+        }
+        // Show/hide ground snow and water
+        this.groundSnow.visible = this.groundSnowAmount > 0.01;
+        this.groundSnow.material.opacity = this.groundSnowAmount * 0.8;
+        // Water appears only as snow melts, and is proportional to melted snow
+        if (this.currentTemperature > 0 && this.groundSnowAmount < 0.99 && this.groundSnowAmount > 0) {
+            this.water.visible = true;
+            this.water.material.opacity = (1 - this.groundSnowAmount) * 0.5;
+        } else {
+            this.water.visible = false;
+        }
+
+        // --- Update ground snow particles geometry and opacity ---
+        if (this.groundParticlePositions.length > 0) {
+            const flat = this.groundParticlePositions.flat();
+            this.groundParticleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(flat, 3));
+            // Set per-particle opacity (Three.js PointsMaterial does not support per-point opacity directly, so fade all together)
+            // As a workaround, set overall opacity to the average of all opacities
+            let avgOpacity = this.groundParticleOpacities.reduce((a, b) => a + b, 0) / this.groundParticleOpacities.length;
+            this.groundParticleMaterial.opacity = avgOpacity;
+            this.groundParticlePoints.visible = true;
+        } else {
+            this.groundParticlePoints.visible = false;
+        }
+
+        // --- Update tree snow particles geometry and opacity ---
+        if (this.treeParticlePositions.length > 0) {
+            const flatTree = this.treeParticlePositions.flat();
+            this.treeParticleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(flatTree, 3));
+            let avgTreeOpacity = this.treeParticleOpacities.reduce((a, b) => a + b, 0) / this.treeParticleOpacities.length;
+            this.treeParticleMaterial.opacity = avgTreeOpacity;
+            this.treeParticlePoints.visible = true;
+        } else {
+            this.treeParticlePoints.visible = false;
+        }
     }
 }
 

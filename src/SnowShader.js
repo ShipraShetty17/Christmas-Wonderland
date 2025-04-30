@@ -2,7 +2,7 @@ import { Color } from 'three';
 
 export const SnowShader = {
   uniforms: {
-    color: { value: new Color("#FFFFFF") }, // Snow color
+    color: { value: new Color("#4CBB17") }, // Snow color
     lightPosition: { value: new Color("#F5F5F5") }, // Light Gray
   },
   vertexShader: /* glsl */ `

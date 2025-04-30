@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import GUI from 'lil-gui';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 
@@ -12,7 +11,6 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
  * Base
  */
 // Debug
-const gui = new GUI();
 
 // Canvas
 const canvas = document.querySelector('canvas.webgl');
@@ -130,41 +128,84 @@ renderer.setSize(sizes.width, sizes.height);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
 /**
- * Particles (Snow)
- */
-const particleCount = 10000; // Adjust particle count
-const particles = new THREE.BufferGeometry();
-const particlePositions = new Float32Array(particleCount * 3);
-
-for (let i = 0; i < particleCount; i++) {
-    particlePositions[i * 3] = (Math.random() - 0.5) * 20; // Adjust position range
-    particlePositions[i * 3 + 1] = Math.random() * 20; // Adjust position range
-    particlePositions[i * 3 + 2] = (Math.random() - 0.5) * 20; // Adjust position range
-}
-
-particles.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
-
-// Load snowflake texture
-const textureLoader = new THREE.TextureLoader();
-const snowflakeTexture = textureLoader.load('/sprites/snowflake.png'); // Replace with the path to your snowflake sprite
-
-const particleMaterial = new THREE.PointsMaterial({
-    map: snowflakeTexture,
-    transparent: true,
-    alphaTest: 0.5,
-    size: 0.1,
-    sizeAttenuation: true
-});
-
-const particleSystem = new THREE.Points(particles, particleMaterial);
-scene.add(particleSystem);
-
-/**
  * Animate
  */
 const clock = new THREE.Clock();
 let previousTime = 0;
 const radius = 4; // Adjust the radius as needed
+
+// --- Snow System ---
+const SNOW_PARTICLE_COUNT = 1500;
+const SNOW_AREA = 8;
+const SNOW_HEIGHT = 7;
+const GROUND_Y = 0.01;
+
+// Snowfall particles
+const snowGeometry = new THREE.BufferGeometry();
+const snowPositions = new Float32Array(SNOW_PARTICLE_COUNT * 3);
+const snowVelocities = new Float32Array(SNOW_PARTICLE_COUNT);
+for (let i = 0; i < SNOW_PARTICLE_COUNT; i++) {
+    snowPositions[i * 3] = (Math.random() - 0.5) * SNOW_AREA;
+    snowPositions[i * 3 + 1] = Math.random() * SNOW_HEIGHT + 2;
+    snowPositions[i * 3 + 2] = (Math.random() - 0.5) * SNOW_AREA;
+    snowVelocities[i] = 0.5 + Math.random() * 0.5;
+}
+snowGeometry.setAttribute('position', new THREE.BufferAttribute(snowPositions, 3));
+const snowMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.08, sizeAttenuation: true });
+const snowParticles = new THREE.Points(snowGeometry, snowMaterial);
+scene.add(snowParticles);
+
+// Ground snow (simple accumulation effect)
+const groundSnowMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
+const groundSnow = new THREE.Mesh(new THREE.CircleGeometry(4.5, 40), groundSnowMaterial);
+groundSnow.rotation.x = -Math.PI / 2;
+groundSnow.position.y = GROUND_Y + 0.01;
+groundSnow.visible = false;
+scene.add(groundSnow);
+
+// Water (appears as snow melts)
+const waterMaterial = new THREE.MeshBasicMaterial({ color: 0x3399ff, transparent: true, opacity: 0.5 });
+const water = new THREE.Mesh(new THREE.CircleGeometry(4.5, 40), waterMaterial);
+water.rotation.x = -Math.PI / 2;
+water.position.y = GROUND_Y + 0.005;
+water.visible = false;
+scene.add(water);
+
+let groundSnowAmount = 1; // 1 = full snow, 0 = all melted
+
+function updateSnowSystem(deltaTime) {
+    // Snowfall logic
+    if (window.getCurrentTemperature() < 0) {
+        snowParticles.visible = true;
+        // Animate snow particles
+        const positions = snowGeometry.attributes.position.array;
+        for (let i = 0; i < SNOW_PARTICLE_COUNT; i++) {
+            positions[i * 3 + 1] -= snowVelocities[i] * deltaTime;
+            if (positions[i * 3 + 1] < GROUND_Y + 0.05) {
+                // Reset to top
+                positions[i * 3] = (Math.random() - 0.5) * SNOW_AREA;
+                positions[i * 3 + 1] = SNOW_HEIGHT + Math.random() * 2;
+                positions[i * 3 + 2] = (Math.random() - 0.5) * SNOW_AREA;
+            }
+        }
+        snowGeometry.attributes.position.needsUpdate = true;
+        // Accumulate snow on ground
+        groundSnowAmount += deltaTime * 0.15; // Accumulate
+        if (groundSnowAmount > 1) groundSnowAmount = 1;
+    } else {
+        snowParticles.visible = false;
+        // Melt ground snow
+        groundSnowAmount -= deltaTime * 0.18 * (1 + window.getCurrentTemperature() / 5); // Faster melt if warmer
+        if (groundSnowAmount < 0) groundSnowAmount = 0;
+    }
+    // Show/hide ground snow and water
+    groundSnow.visible = groundSnowAmount > 0.01;
+    groundSnow.material.opacity = groundSnowAmount * 0.8;
+    water.visible = groundSnowAmount < 0.99;
+    water.material.opacity = (1 - groundSnowAmount) * 0.5;
+}
+
+// --- End Snow System ---
 
 const tick = () => {
     const elapsedTime = clock.getElapsedTime();
@@ -184,15 +225,8 @@ const tick = () => {
         train.rotation.y = -angle - Math.PI / 2; // Rotate the train to face the direction of movement
     }
 
-    // Update particles (snow)
-    const positions = particles.attributes.position.array;
-    for (let i = 0; i < particleCount; i++) {
-        positions[i * 3 + 1] -= deltaTime * 0.5; // Adjust speed as needed
-        if (positions[i * 3 + 1] < 0) {
-            positions[i * 3 + 1] = 20;
-        }
-    }
-    particles.attributes.position.needsUpdate = true;
+    // Update snow system
+    updateSnowSystem(deltaTime);
 
     // Update controls
     controls.update();
@@ -205,3 +239,20 @@ const tick = () => {
 };
 
 tick();
+
+document.addEventListener('DOMContentLoaded', () => {
+    const tempSlider = document.getElementById('temp-slider');
+    const tempValue = document.getElementById('temp-value');
+    let currentTemperature = parseFloat(tempSlider.value);
+    tempValue.textContent = currentTemperature;
+
+    tempSlider.addEventListener('input', () => {
+        currentTemperature = parseFloat(tempSlider.value);
+        tempValue.textContent = currentTemperature;
+        // You can use currentTemperature in your snow system logic
+        // console.log('Temperature changed:', currentTemperature);
+    });
+
+    // Make currentTemperature globally accessible
+    window.getCurrentTemperature = () => currentTemperature;
+});
